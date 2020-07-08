@@ -70,6 +70,10 @@ module type WagonC = sig
   val make_vec256 : ('a c_vdt, _, _) ctyp -> ('a c_v256, 'b, 'a c_vdt expr array -> 'b) ctyp
   val make_vec512 : ('a c_vdt, _, _) ctyp -> ('a c_v512, 'b, 'a c_vdt expr array -> 'b) ctyp
 
+  val sub_vec128 : 'a c_v128 expr -> c_int32 c_vdt expr -> 'a c_vdt expr
+  val sub_vec256 : 'a c_v256 expr -> c_int32 c_vdt expr -> 'a c_vdt expr
+  val sub_vec512 : 'a c_v512 expr -> c_int32 c_vdt expr -> 'a c_vdt expr
+
 
   val (@+) : ('at0, 'b, 'c) ctyp -> ('at1, 'a, 'b) ctyp -> ('at0 * 'at1, 'a, 'c) ctyp
   val make_struct : ('at0 * 'at1, 'b, 'c) ctyp -> (('at0 * 'at1) c_struct, 'b, 'c) ctyp
@@ -107,6 +111,9 @@ module type WagonC = sig
   val show_stmt : 'rt stmt -> string
   val show_func : (_,_) fn -> string
 
+  val addi32 : c_int32 c_vdt expr -> c_int32 c_vdt expr -> c_int32 c_vdt expr
+  val addv256i32 : ((c_int32 c_v256 * c_int32 c_v256) c_marg, c_int32 c_v256) fn
+  val addv256i32_e : c_int32 c_v256 expr -> c_int32 c_v256 expr -> c_int32 c_v256 expr
   
 end
 
@@ -350,7 +357,12 @@ module WagonC_TF : WagonC = struct
   }
 
   let sub_arr typ v n = Printf.sprintf "%s[%s]" v n
-  let sub_arrl typ v n = Printf.sprintf "%s[%s]" v n
+  let sub_arrl = sub_arr
+
+  let sub_vec128 = sub_arr ()
+  let sub_vec256 = sub_arr ()
+  let sub_vec512 = sub_arr ()
+
 
   let _decl_counter = ref 0
   let _decl_get_counter () = let n = !_decl_counter in _decl_counter := !_decl_counter + 1 ; n
@@ -370,4 +382,20 @@ module WagonC_TF : WagonC = struct
   let show_stmt = fun x -> x
   let show_func = fun x -> x.fn_decl
 
+  let addi32 = fun x y -> Printf.sprintf "%s + %s" x y
+
+  let addv256i32 = {
+    fn_name = "_mm256_add_epi32";
+    fn_decl = ""
+  }
+  let addv256f32 = {
+    fn_name = "_mm256_add_ps";
+    fn_decl = ""
+  }
+
+  let addv256i32_e = fun x y -> Printf.sprintf "_mm256_add_epi32(%s, %s)" x y
+  let addv256f64 = {
+    fn_name = "_mm256_add_pd";
+    fn_decl = ""
+  }
 end
