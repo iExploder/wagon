@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Wagon: Type-safe Accelerated DSL for OCaml</title>
+        <style>
+</style>
+        
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/markdown.css">
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/Microsoft/vscode/extensions/markdown-language-features/media/highlight.css">
+        
+        <style>
+.task-list-item { list-style-type: none; } .task-list-item-checkbox { margin-left: -20px; vertical-align: middle; }
+</style>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe WPC', 'Segoe UI', 'Ubuntu', 'Droid Sans', sans-serif;
+                font-size: 14px;
+                line-height: 1.6;
+            }
+        </style>
+        
+        
+        
+    </head>
+    <body class="vscode-light">
+        <h1 id="wagon-type-safe-accelerated-dsl-for-ocaml">Wagon: Type-safe Accelerated DSL for OCaml</h1>
+<h2 id="introduction-background">Introduction: Background</h2>
+<p>Recently, SIMD instructions are widely brought in on modern x86-based architectures,
+for enhancing single-core performance.</p>
+<p>From Intel's Ice Lake architecture for consuming market and
+Knights Landing(Xeon Phi x200) / Skylake-X(Core-X Series, Xeon Scalable Processor Family)
+for enterprise and workstations,
+SIMD instructions with up to 512-bit vectors as operands are supported.</p>
+<p>However, SIMD instructions are not designed as out-of-the-box.</p>
+<p>Automatic vectorization-based optimization implemented in modern compilers are far from squeezing
+all the juice of modern CPUs.
+Besides, writing vectorized assembly code with manual management of registers is not reasonable.</p>
+<p>There comes a balanced solution, <strong>SIMD Intrinsics</strong>, instructions in form of C functions.</p>
+<p>With SIMD Intrinsics, you CAN</p>
+<ul>
+<li>Do vectorized operations without management of registers</li>
+<li>Do manual vectorization-based optimization on your C/C++ (or languages with compatibility with C language) programs</li>
+</ul>
+<p>You CAN NOT</p>
+<ul>
+<li>Take advantage of automatic SIMD vectorization by compilers (since analysis become complicated on manually vectorized codes)</li>
+</ul>
+<p>There are several problems on usage of Intel SIMD instructions, such as</p>
+<ul>
+<li><strong>Memory alignment problem</strong>. 128-bit SIMD instructions have not aligned version with approximately 20% of performance loss, while SIMD instructions over 256-bit require all operands be aligned to multiple of vector lengths.</li>
+</ul>
+<pre><code class="language-text"><code><div>(Memory Space)
++-+-+-+-+-+-+-+-+      +-+-+-+-+-+-+-+-+
+| | | | | | | | |      | | | | | | |O|O|
++-+-+-+-+-+-+-+-+      +-+-+-+-+-+-+-+-+      +-+
+|O|O|O|O|O|O|O|O|      |O|O|O|O|O|O|X|X|      | | = 64 bits
++-+-+-+-+-+-+-+-+      +-+-+-+-+-+-+-+-+      +-+
+|X|X|X|X|X|X|X|X|      |X|X|X|X|X|X| | |
++-+-+-+-+-+-+-+-+      +-+-+-+-+-+-+-+-+
+       OK!           NG! (Segmentation Fault)
+When doing something SIMD(512-bit) with Vectors O &amp; X
+</div></code></code></pre>
+<ul>
+<li><strong>Unioned Integer Vectors</strong>. Only <strong>ONE</strong> type of vector for each length handling all flavors of integer scalars in <code>union</code>s. Developers must remember scalar member type of integer vectors.</li>
+</ul>
+<pre><code class="language-c"><div><span class="hljs-comment">/* From &lt;immintrin.h&gt; */</span>
+<span class="hljs-keyword">typedef</span> <span class="hljs-keyword">union</span>  __declspec(intrin_type) __declspec(align(<span class="hljs-number">32</span>)) __m256i {
+    __int8              m256i_i8[<span class="hljs-number">32</span>];
+    __int16             m256i_i16[<span class="hljs-number">16</span>];
+    __int32             m256i_i32[<span class="hljs-number">8</span>];
+    __int64             m256i_i64[<span class="hljs-number">4</span>];
+    <span class="hljs-keyword">unsigned</span> __int8     m256i_u8[<span class="hljs-number">32</span>];
+    <span class="hljs-keyword">unsigned</span> __int16    m256i_u16[<span class="hljs-number">16</span>];
+    <span class="hljs-keyword">unsigned</span> __int32    m256i_u32[<span class="hljs-number">8</span>];
+    <span class="hljs-keyword">unsigned</span> __int64    m256i_u64[<span class="hljs-number">4</span>];
+} __m256i;
+</div></code></pre>
+<ul>
+<li><strong>Unconcerned Type Casting</strong>. This problem is actually from C language, not SIMD intrinsics.
+In C language <strong>implicit type casting</strong> is enabled default and causing unconcerned problems.</li>
+</ul>
+<h2 id="fundamental-design-of-wagon">Fundamental Design of <strong>Wagon</strong></h2>
+<p>There comes the design of <strong>Wagon</strong> to solve the problems above.</p>
+<h3 id="design-for-the-problems">Design for the problems</h3>
+<ul>
+<li>For <strong>Memory alignment problem</strong>, arrays and vectors aligned or aligned data through alignment-preserving operations <strong>CAN</strong> be used in vectorized intrinsic functions.
+<ul>
+<li>Vector types are properly aligned by default</li>
+<li>Optional aligned arrays (on purpose)</li>
+<li>Sub-array &amp; Sub-vector functions preserves alignment tags</li>
+</ul>
+</li>
+<li>For <strong>Unioned Integer Vectors</strong>, unioned access for integer vectors is <strong>DISABLED</strong> in Wagon.
+Instead, combinations for all integer types and vector lengths are provided.
+Besides, transformation for different integer flavors of vectors are provided
+for purposed operations.</li>
+</ul>
+<pre><code class="language-text"><code><div>+---------------+                  +---------------------------------+
+| Pre-processed |  Tagless-final   | C Code (in string)              |
+|   Wagon Code  | ===============&gt; | (Primitive &amp; Compositive Types) |
+|     (eDSL)    |  Code Generator  | with Intel SIMD Intrinsics      |
++---------------+                  +---------------------------------+
+</div></code></code></pre>
+<h3 id="pros--cons">Pros &amp; Cons</h3>
+<p>In design of Wagon, you may benefit from <strong>Wagon</strong>'s pros:</p>
+<ul>
+<li>SIMD optimized performance on functional programming language(OCaml)</li>
+<li>Static Type Safety</li>
+<li>No Implicit Type Casting by default
+<ul>
+<li>Unconcerned type castings are prevented</li>
+<li>Type coercing also provided for experienced SIMD developers</li>
+</ul>
+</li>
+<li>Aligned SIMD-friendly vector types
+<ul>
+<li>Data with SIMD-available access are correctly aligned</li>
+</ul>
+</li>
+</ul>
+<p>Besides, your programming may be affected by <strong>Wagon</strong>'s drawbacks:</p>
+<ul>
+<li>No automatic vectorization yet (you vectorize your code manually)</li>
+<li>(For Former-Users of C, ...) Functional Programming may be different from Imperative Programming</li>
+</ul>
+<h3 id="intended-users-image">Intended Users' Image</h3>
+<ul>
+<li>Functional Programmers who want their program run faster on modern architecture.</li>
+<li>Imperative Programmers who like adding functional programming flavors into their projects.</li>
+</ul>
+<h2 id="highlights">Highlights</h2>
+<h3 id="tagless-final-base-of-the-language">Tagless-final: Base of the language</h3>
+<pre><code class="language-ocaml"><div><span class="hljs-comment">(* (G)ADT example *)</span>
+<span class="hljs-keyword">type</span> expr =
+| <span class="hljs-type">IntLit</span> <span class="hljs-keyword">of</span> <span class="hljs-built_in">int</span>
+| <span class="hljs-type">Add</span> <span class="hljs-keyword">of</span> expr * expr
+<span class="hljs-keyword">let</span> <span class="hljs-keyword">rec</span> eval e = 
+<span class="hljs-keyword">match</span> e <span class="hljs-keyword">with</span>
+| <span class="hljs-type">IntLit</span>(i) -&gt; i
+| <span class="hljs-type">Add</span>(e1, e2) -&gt; (eval e1) + (eval e2)
+<span class="hljs-keyword">let</span> <span class="hljs-keyword">rec</span> display e =
+<span class="hljs-keyword">match</span> e <span class="hljs-keyword">with</span>
+| <span class="hljs-type">IntLit</span>(i) -&gt; string_of_int i
+| <span class="hljs-type">Add</span>(e1, e2) -&gt; <span class="hljs-type">Printf</span>.sprintf <span class="hljs-string">"(%s + %s)"</span> 
+				   (display e1) (display e2)
+<span class="hljs-keyword">let</span> e = <span class="hljs-type">Add</span>(<span class="hljs-type">IntLit</span> <span class="hljs-number">1</span>, <span class="hljs-type">IntLit</span> <span class="hljs-number">2</span>)
+<span class="hljs-keyword">let</span> result = eval e 
+<span class="hljs-comment">(* -&gt; int : 3 *)</span>
+<span class="hljs-keyword">let</span> str_expr = display e 
+<span class="hljs-comment">(* string: "(1 + 2)" *)</span>
+
+<span class="hljs-comment">(* Tagless-final example *)</span>
+<span class="hljs-keyword">module</span> <span class="hljs-keyword">type</span> <span class="hljs-type">TFExample</span> = <span class="hljs-keyword">sig</span>
+    <span class="hljs-keyword">type</span> expr
+    <span class="hljs-keyword">val</span> intlit : <span class="hljs-built_in">int</span> -&gt; expr
+    <span class="hljs-keyword">val</span> add : expr -&gt; expr -&gt; expr
+<span class="hljs-keyword">end</span>
+<span class="hljs-keyword">module</span> <span class="hljs-type">TFEval</span> = <span class="hljs-keyword">struct</span>
+    <span class="hljs-keyword">type</span> expr = <span class="hljs-built_in">int</span>
+    <span class="hljs-keyword">let</span> intlit = <span class="hljs-keyword">fun</span> x -&gt; x
+    <span class="hljs-keyword">let</span> add = <span class="hljs-keyword">fun</span> e1 e2 -&gt; e1 + e2
+<span class="hljs-keyword">end</span>
+<span class="hljs-keyword">module</span> <span class="hljs-type">TFDisplay</span> = <span class="hljs-keyword">struct</span>
+    <span class="hljs-keyword">type</span> expr = <span class="hljs-built_in">string</span>
+    <span class="hljs-keyword">let</span> intlit = <span class="hljs-keyword">fun</span> x -&gt; string_of_int x
+    <span class="hljs-keyword">let</span> add = <span class="hljs-keyword">fun</span> e1 e2 -&gt; <span class="hljs-type">Printf</span>.sprintf <span class="hljs-string">"(%s + %s)"</span> e1 e2
+<span class="hljs-keyword">end</span>
+<span class="hljs-keyword">module</span> <span class="hljs-type">Expr</span>(<span class="hljs-type">T</span>) = <span class="hljs-keyword">struct</span>
+    <span class="hljs-keyword">open</span> <span class="hljs-type">T</span>
+    <span class="hljs-keyword">let</span> s = add (intlit <span class="hljs-number">1</span>) (intlit <span class="hljs-number">2</span>)
+<span class="hljs-keyword">end</span>
+<span class="hljs-keyword">let</span> result = <span class="hljs-keyword">let</span> <span class="hljs-keyword">module</span> <span class="hljs-type">Eval</span> = <span class="hljs-type">Expr</span>(<span class="hljs-type">TFEval</span>) <span class="hljs-keyword">in</span> <span class="hljs-type">Eval</span>.s
+<span class="hljs-keyword">let</span> str_expr = <span class="hljs-keyword">let</span> <span class="hljs-keyword">module</span> <span class="hljs-type">Display</span> = <span class="hljs-type">Expr</span>(<span class="hljs-type">TFDisplay</span>) <span class="hljs-keyword">in</span> <span class="hljs-type">Display</span>.s
+</div></code></pre>
+<h3 id="functional-unparsing-for-painless-support-of-combinated-data-types">Functional Unparsing for Painless Support of Combinated Data Types</h3>
+<p>From Danvy(1998) 's problem of creating type-safe functional formatted print function
+like <code>printf()</code> in C language.
+The solution used Continuation Passing Style(CPS) to implement combinable format elements in higher-order functions.</p>
+<p>Here is an example.</p>
+<pre><code class="language-ocaml"><div><span class="hljs-keyword">type</span> (<span class="hljs-symbol">'a</span>, <span class="hljs-symbol">'b</span>) fmt = (<span class="hljs-built_in">string</span> -&gt; <span class="hljs-symbol">'a</span>) -&gt; <span class="hljs-symbol">'b</span>
+
+<span class="hljs-comment">(* Literal String &amp; Sample Formats *)</span>
+<span class="hljs-keyword">let</span> lit : <span class="hljs-built_in">string</span> -&gt; (<span class="hljs-symbol">'a</span>, <span class="hljs-symbol">'a</span>) fmt = <span class="hljs-keyword">fun</span> s -&gt; <span class="hljs-keyword">fun</span> k -&gt; k s
+<span class="hljs-keyword">let</span> <span class="hljs-built_in">int</span> : (<span class="hljs-symbol">'a</span>, <span class="hljs-built_in">int</span> -&gt; <span class="hljs-symbol">'a</span>) fmt = <span class="hljs-keyword">fun</span> k x -&gt; k (string_of_int x)
+
+<span class="hljs-comment">(* Combinator Operator *)</span>
+<span class="hljs-keyword">let</span> (&lt;&gt;) : (<span class="hljs-symbol">'b</span>, <span class="hljs-symbol">'c</span>) fmt -&gt; (<span class="hljs-symbol">'a</span>, <span class="hljs-symbol">'b</span>) fmt -&gt; (<span class="hljs-symbol">'a</span>, <span class="hljs-symbol">'c</span>) fmt =
+  <span class="hljs-keyword">fun</span> l r k -&gt; l (<span class="hljs-keyword">fun</span> sa -&gt; r (<span class="hljs-keyword">fun</span> sb -&gt; k (sa ^ sb)))
+
+<span class="hljs-keyword">let</span> my_sprintf : (<span class="hljs-built_in">string</span>, <span class="hljs-symbol">'b</span>) fmt -&gt; <span class="hljs-symbol">'b</span> = <span class="hljs-keyword">fun</span> f -&gt; f (<span class="hljs-keyword">fun</span> x -&gt; x)
+
+<span class="hljs-comment">(* Usage *)</span>
+# my_sprintf (lit <span class="hljs-string">"x="</span> &lt;&gt; <span class="hljs-built_in">int</span>) <span class="hljs-number">3</span>;;
+- : <span class="hljs-built_in">string</span> = <span class="hljs-string">"x=3"</span>
+</div></code></pre>
+<p>Here gives (manual) type inference of how <code>&lt;&gt;</code> works.</p>
+<pre><code class="language-ocaml"><div><span class="hljs-keyword">let</span> (&lt;&gt;) : (<span class="hljs-symbol">'b</span>, <span class="hljs-symbol">'c</span>) fmt -&gt; (<span class="hljs-symbol">'a</span>, <span class="hljs-symbol">'b</span>) fmt -&gt; (<span class="hljs-symbol">'a</span>, <span class="hljs-symbol">'c</span>) fmt =
+  <span class="hljs-keyword">fun</span> l r k -&gt; l (<span class="hljs-keyword">fun</span> sa -&gt; r (<span class="hljs-keyword">fun</span> sb -&gt; k (sa ^ sb)))
+
+sa : <span class="hljs-built_in">string</span>
+sb : <span class="hljs-built_in">string</span>
+
+l : (<span class="hljs-symbol">'b</span>, <span class="hljs-symbol">'c</span>) fmt &lt;=&gt; (<span class="hljs-built_in">string</span> -&gt; <span class="hljs-symbol">'b</span>) -&gt; <span class="hljs-symbol">'c</span>
+r : (<span class="hljs-symbol">'a</span>, <span class="hljs-symbol">'b</span>) fmt &lt;=&gt; (<span class="hljs-built_in">string</span> -&gt; <span class="hljs-symbol">'a</span>) -&gt; <span class="hljs-symbol">'b</span>
+k : <span class="hljs-built_in">string</span> -&gt; <span class="hljs-symbol">'a</span>
+k (sa ^ sb) : <span class="hljs-symbol">'a</span> 
+(<span class="hljs-keyword">fun</span> sb -&gt; k (sa ^ sb)) : <span class="hljs-built_in">string</span> -&gt; <span class="hljs-symbol">'a</span>
+(<span class="hljs-keyword">fun</span> sa -&gt; r (<span class="hljs-keyword">fun</span> sb -&gt; k (sa ^ sb))) : <span class="hljs-built_in">string</span> -&gt; <span class="hljs-symbol">'b</span>
+</div></code></pre>
+<p>So for combinating <code>float</code> and <code>int</code>,</p>
+<pre><code class="language-ocaml"><div><span class="hljs-built_in">float</span> : (<span class="hljs-symbol">'x</span>, <span class="hljs-built_in">float</span> -&gt; <span class="hljs-symbol">'x</span>) fmt
+<span class="hljs-built_in">int</span> : (<span class="hljs-symbol">'y</span>, <span class="hljs-built_in">int</span> -&gt; <span class="hljs-symbol">'y</span>) fmt
+</div></code></pre>
+<ul>
+<li>From <code>float</code>, <code>'b = 'x</code>, <code>'c = float -&gt; x</code>.</li>
+<li>From <code>int</code>, <code>'a = 'y</code>, <code>'b = int -&gt; y</code>.</li>
+<li>We can find
+<ul>
+<li><code>'a = 'y</code></li>
+<li><code>'b = int -&gt; 'y</code></li>
+<li><code>'c = float -&gt; 'x = float -&gt; int -&gt; 'y</code></li>
+</ul>
+</li>
+<li>So combined format type is
+<code>('a, 'c) fmt = ('y, float -&gt; int -&gt; 'y) fmt</code>.</li>
+</ul>
+<p>In this way we could achieve combined formats.
+In other words, literal in string of combined types could be also</p>
+<h2 id="roadmap">Roadmap</h2>
+<ul>
+<li>Remote Type Representation (DONE)
+<ul>
+<li>Functional Unparsing Style</li>
+</ul>
+</li>
+<li>Function Representation (NEXT)</li>
+</ul>
+
+    </body>
+    </html>

@@ -63,6 +63,11 @@ module WagonGeneral : WagonBasic = struct
       k ("{" ^ String.concat ", " lst ^ "}")
   }
 
+  let wfunc = fun t0 t1 -> {
+    name = t0.name ^ "->" ^ t1.name;
+    init = fun 
+  }
+
   let _lbk  : ('a, 'a) wfus = fun k -> k "{"
   let _rbk  : ('a, 'a) wfus = fun k -> k "}"
   let _cons_none : ('b, 'c) wfus -> ('a, 'b) wfus -> ('a, 'c) wfus =
@@ -78,6 +83,7 @@ module WagonGeneral : WagonBasic = struct
 
   let delval = fun x -> x
 
+
   let _decl_counter = ref 0
   let _get_counter = 
     fun () -> 
@@ -91,6 +97,7 @@ module WagonGeneral : WagonBasic = struct
     decl = sprintf "%s wv_%08x = %s;" t.name counter i
   }
 
+  let decl_v = fun d -> d.v
 
   let make_func = 
   fun t0 t1 e -> 

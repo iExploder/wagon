@@ -16,6 +16,11 @@ module type WagonBasic =
     val cons_wtype :
       ('at0, 'wfb, 'wfc) wtype ->
       ('at1, 'wfa, 'wfb) wtype -> ('at0 * 'at1, 'wfa, 'wfc) wtype
+
+    val cons_wtype_paramlist :
+      ('at0, 'wfb, 'wfc) wtype ->
+      ('at1, 'wfa, 'wfb) wtype -> ('at0 * 'at1, 'wfa, 'wfc) wtype
+      
     type wbln
     type wi8
     type wi16
@@ -39,6 +44,32 @@ module type WagonBasic =
     val lit : ('a, 'a wexpr, 'b) wtype -> 'b
     val wstruct : ('th * 'tl, 'a, 'b) wtype -> (('th * 'tl) wstruct, 'a, 'b) wtype
     val warray : ('at, 'a, 'b) wtype -> int -> ('at warray, 'c, 'at wexpr array -> 'c) wtype
+
+(* 
+
+X:  lit @@ warray wi16 [|1; 100|] 
+O:  lit @@ warray wi16 [|lit wi16 1; lit wi16 100|]
+
+warray wi16 2:
+(wi16 ityp warray, 'a, wi16 ityp wexpr array -> 'a) wtype
+={
+  name= "int16_t[2]";
+  init = fun k arr -> 
+  (* Length Check Needed *)
+  let lst = Array.to_list arr in
+  k ("{" ^ String.concat ", " lst ^ "}")
+}
+
+lit (warray wi16 2):
+wi16 ityp wexpr array -> wi16 ityp warray wexpr 
+
+lit (warray wi16 2) [|lit wi16 1; lit wi16 100|] => "{1,100}"
+
+get-er, set-er for arrays, structures.
+*)
+    val warray_get : 'a warray wexpr -> 'b ityp wexpr -> 'a wexpr
+    val warray_set : 'a warray wexpr -> 'b ityp wexpr -> 'a wexpr -> wstmt
+    val wfunc : ('at0, 'a0, 'b0) wtype -> ('at1, 'a1, 'b1) wtype -> ('at0 -> 'at1, 'a0, 'at0 wexpr -> 'at1 wexpr -> 'a0) wtype
     val show : 'a wexpr -> string
 
     (* Remove lval tag *)
@@ -46,10 +77,13 @@ module type WagonBasic =
 
     val decl : ('t, _, _) wtype -> 't wexpr -> 't wexpr decl
 
-    val make_func : ('t0, _, _) wtype -> ('t1, _, _) wtype -> ('t0 wexpr -> 't1 wexpr) -> ('t0 -> 't1) wfunc
+    val decl_v : 't wexpr decl -> 't wexpr lval
+
+
     val apply : ('t0 -> 't1) wfunc -> 't0 wexpr -> 't1 wexpr
 
     val addf : wf32 wexpr -> wf32 wexpr -> wf32 wexpr
+
 
     (* val assign : 'a wexpr lval -> 'a wexpr -> wstmt *)
   end

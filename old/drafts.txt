@@ -1,0 +1,12 @@
+int test_func(int x)
+{ 
+  if (x>10) return 100;
+  return 0;
+}
+
+typename : ('a, 'b, 'c) ctyp -> string
+
+typename c_int32 => "int32_t"
+typename 
+
+make_fn<'args, 'rt>
