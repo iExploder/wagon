@@ -226,7 +226,7 @@ module WagonC_TF : WagonC = struct
     decl = (fun x -> Printf.sprintf "%s %s" vname x);
     tn = vname;
     init = (fun f x -> if Array.length x = (vlen / vdt.size) 
-                       then f (String.concat ", " x)
+                       then f (String.concat ", " @@ Array.to_list x)
                        else failwith "vec128 initializer size mismatch");
     size = vlen;
     abbr = fun () -> failwith "Should not happen"
@@ -238,7 +238,7 @@ module WagonC_TF : WagonC = struct
     decl = (fun x -> Printf.sprintf "%s %s" vname x);
     tn = vname;
     init = (fun f x -> if Array.length x = (vlen / vdt.size) 
-                       then f (String.concat ", " x)
+                       then f (String.concat ", " @@ Array.to_list x)
                        else failwith "vec256 initializer size mismatch");
     size = vlen;
     abbr = fun () -> failwith "Should not happen"
@@ -250,7 +250,7 @@ module WagonC_TF : WagonC = struct
     decl = (fun x -> Printf.sprintf "%s %s" vname x);
     tn = vname;
     init = (fun f x -> if Array.length x = (vlen / vdt.size) 
-                       then f (String.concat ", " x)
+                       then f (String.concat ", " @@ Array.to_list x)
                        else failwith "vec512 initializer size mismatch");
     size = vlen;
     abbr = fun () -> failwith "Should not happen"
