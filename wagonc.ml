@@ -5,8 +5,6 @@ module type WagonC = sig
   type 'rt stmt
   (* Typed Expression in C *)
   type 't expr
-  (* Declaration in C *)
-  type 'a decl
   (* Function in C *)
   type ('args, 'rt) fn
 
@@ -73,6 +71,9 @@ module type WagonC = sig
   val sub_vec128 : 'a c_v128 expr -> c_int32 c_vdt expr -> 'a c_vdt expr
   val sub_vec256 : 'a c_v256 expr -> c_int32 c_vdt expr -> 'a c_vdt expr
   val sub_vec512 : 'a c_v512 expr -> c_int32 c_vdt expr -> 'a c_vdt expr
+  val sub_vec128l : 'a c_v128 expr -> c_int32 c_vdt expr -> 'a c_vdt expr
+  val sub_vec256l : 'a c_v256 expr -> c_int32 c_vdt expr -> 'a c_vdt expr
+  val sub_vec512l : 'a c_v512 expr -> c_int32 c_vdt expr -> 'a c_vdt expr
 
 
   val (@+) : ('at0, 'b, 'c) ctyp -> ('at1, 'a, 'b) ctyp -> ('at0 * 'at1, 'a, 'c) ctyp
@@ -85,6 +86,8 @@ module type WagonC = sig
   val if_stmt : c_bool expr -> 'rt stmt -> 'rt stmt -> 'rt stmt
   val seq_stmt : 'rt stmt list -> 'rt stmt
   val ret_stmt : 'rt expr -> 'rt stmt
+  (* For-statement generator: Notice decl_stmt is needed *)
+  val for_stmt : c_bool expr * 'any stmt * 'rt stmt -> 'rt stmt
   (* Constexpr initializer generator *)
   val const : ('at, 'at expr, 'b) ctyp -> 'b
 
@@ -100,10 +103,8 @@ module type WagonC = sig
 
   val sub_arr : ('a c_array, _, _) ctyp -> 'a c_array expr -> c_int32 c_vdt expr -> 'a expr
   val sub_arrl : ('a c_array, _, _) ctyp -> 'a c_array expr lval -> c_int32 c_vdt expr -> 'a expr lval
-  val decl : ('at, _, _) ctyp -> 'at expr -> 'at decl
-
-  val decl_stmt : 'at decl -> 'b stmt
-  val decl_exprl : 'at decl -> 'at expr lval
+  val decl_stmt : ('at, _, _) ctyp -> 'at expr -> ('at expr lval -> 'rt stmt) -> 'rt stmt
+  val delval : 'at expr lval -> 'at expr
 
   val assign_stmt : 'at expr lval -> 'at expr -> 'rt stmt
 
@@ -111,9 +112,14 @@ module type WagonC = sig
   val show_stmt : 'rt stmt -> string
   val show_func : (_,_) fn -> string
 
-  val addi32 : c_int32 c_vdt expr -> c_int32 c_vdt expr -> c_int32 c_vdt expr
-  val addv256i32 : ((c_int32 c_v256 * c_int32 c_v256) c_marg, c_int32 c_v256) fn
-  val addv256i32_e : c_int32 c_v256 expr -> c_int32 c_v256 expr -> c_int32 c_v256 expr
+  val addi32 : c_int32 c_vdt expr * c_int32 c_vdt expr -> c_int32 c_vdt expr
+  val addv256i32 : c_int32 c_v256 expr * c_int32 c_v256 expr -> c_int32 c_v256 expr
+  val addv256f32 : c_float32 c_v256 expr * c_float32 c_v256 expr -> c_float32 c_v256 expr
+  val addv256f64 : c_float64 c_v256 expr * c_float64 c_v256 expr -> c_float64 c_v256 expr
+  val mulv256f32 : c_float32 c_v256 expr * c_float32 c_v256 expr -> c_float32 c_v256 expr
+  val mulv256f64 : c_float64 c_v256 expr * c_float64 c_v256 expr -> c_float64 c_v256 expr
+  val fmaddv256f32 : c_float32 c_v256 expr * c_float32 c_v256 expr * c_float32 c_v256 expr -> c_float32 c_v256 expr
+  val fmaddv256f64 : c_float64 c_v256 expr * c_float64 c_v256 expr * c_float64 c_v256 expr -> c_float64 c_v256 expr
   
 end
 
@@ -363,39 +369,37 @@ module WagonC_TF : WagonC = struct
   let sub_vec256 = sub_arr ()
   let sub_vec512 = sub_arr ()
 
+  let sub_vec128l = sub_arr ()
+  let sub_vec256l = sub_arr ()
+  let sub_vec512l = sub_arr ()
+
 
   let _decl_counter = ref 0
   let _decl_get_counter () = let n = !_decl_counter in _decl_counter := !_decl_counter + 1 ; n
-  let decl typ iv = 
+
+  let decl_stmt typ iv fxs = 
     let decl_name = Printf.sprintf "wdecl_%d" @@ _decl_get_counter () in
-    {
-      dl_name = decl_name;
-      dl_stmt = Printf.sprintf "%s = %s;" (typ.decl decl_name) iv
-    }
+    Printf.sprintf "{ %s = %s; %s }" (typ.decl decl_name) iv (fxs decl_name)
 
-  let decl_stmt d = d.dl_stmt
+  let for_stmt : c_bool expr * 'any stmt * 'rt stmt -> 'rt stmt =
+  fun (cond,step,s) -> 
+    let handled_step = String.concat "," (List.filter (fun x -> String.length x != 0) (String.split_on_char ';' step)) in
+    Printf.sprintf "for (;%s;%s) {%s}" cond handled_step s
+  let delval = fun x -> x
 
-  let decl_exprl d = d.dl_name
   let assign_stmt lhs rhs = Printf.sprintf "%s = %s;" lhs rhs
 
   let show_expr = fun x -> x
   let show_stmt = fun x -> x
   let show_func = fun x -> x.fn_decl
 
-  let addi32 = fun x y -> Printf.sprintf "%s + %s" x y
+  let addi32 = fun (x,y) -> Printf.sprintf "%s + %s" x y
+  let addv256i32 = fun (x,y) -> Printf.sprintf "_mm256_add_epi32(%s, %s)" x y
+  let addv256f32 = fun (x,y) -> Printf.sprintf "_mm256_add_ps(%s, %s)" x y
+  let addv256f64 = fun (x,y) -> Printf.sprintf "_mm256_add_pd(%s, %s)" x y
+  let mulv256f32 = fun (x,y) -> Printf.sprintf "_mm256_mul_ps(%s, %s)" x y
+  let mulv256f64 = fun (x,y) -> Printf.sprintf "_mm256_mul_pd(%s, %s)" x y
+  let fmaddv256f32 = fun (x,y,z) -> Printf.sprintf "_mm256_fmadd_ps(%s, %s, %s)" x y z
+  let fmaddv256f64 = fun (x,y,z) -> Printf.sprintf "_mm256_fmadd_pd(%s, %s, %s)" x y z
 
-  let addv256i32 = {
-    fn_name = "_mm256_add_epi32";
-    fn_decl = ""
-  }
-  let addv256f32 = {
-    fn_name = "_mm256_add_ps";
-    fn_decl = ""
-  }
-
-  let addv256i32_e = fun x y -> Printf.sprintf "_mm256_add_epi32(%s, %s)" x y
-  let addv256f64 = {
-    fn_name = "_mm256_add_pd";
-    fn_decl = ""
-  }
 end
