@@ -1,5 +1,5 @@
 #require "str"
-#use "wagonc.ml"
+#use "WagonC.ml"
 open WagonC
 
 let mystring = c_string 10
@@ -16,7 +16,7 @@ let myargs_expr = const myargs 1 2 3.0
 let _ = show_expr mystruct_expr;;
 let _ = show_expr myargs_expr;;
 
-#use "mtype_accessor.ml"
+#use "MTypeAccessor.ml"
 
 open MTypeAccessor
 let mystruct_expr_sub = struct_accessor _2 mystruct_expr
@@ -26,17 +26,22 @@ let _ = show_expr mystruct_expr_sub
 
 (* Example Function *)
 
+(* let func0 = fun x -> x + 1 *)
 let func0 = make_fn c_int32 c_int32 empty_fn (fun _ a -> ret_stmt @@ addi (a, (const c_int32 1)))
 let func0_str = show_func_with_dep func0
 
+(* let func1 = fun x -> (func0 x) + 1 *)
 let func1 = make_fn ~cname:"myfunc1" c_int32 c_int32 (func0 @& empty_fn) 
   (fun fd a -> ret_stmt @@ addi (fnc_accessor _0 fd a, (const c_int32 1)))
 let func1_str = show_func_with_dep func1
 
-let func2 = make_fn ~cname:"myfunc1" c_int32 c_int32 (func0 @& func1 @& empty_fn)
-  (fun fd a -> ret_stmt @@ addi (fnc_accessor _0 fd a, fnc_accessor _1 fd a))
+(* let func2 = fun x -> (func0 x) + (func1 x) *)
+let func2 = make_fn ~cname:"myfunc1" c_int32 c_int32 (func1 @& empty_fn)
+  (fun fd a -> ret_stmt @@ addi (const c_int32 1, fnc_accessor _0 fd a))
 
 let func2_str = show_func_with_dep func2
+
+
 
 
 (* Recursive Function *)
