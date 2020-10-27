@@ -13,7 +13,7 @@ module WagonC : sig
 
   type prog
 
-  (* Functional-Unparsing Powered C-Type Representation *)
+  (* C Type Representation for Wagon Templated Interfaces *)
   type ('at, 'a, 'b) ctyp
 
   (* Abstract Types: Primitive Types *)
@@ -63,13 +63,23 @@ module WagonC : sig
   val make_vec256 : ('a c_vdt, _, _) ctyp -> ('a c_v256, 'b, 'a c_vdt expr array -> 'b) ctyp
   val make_vec512 : ('a c_vdt, _, _) ctyp -> ('a c_v512, 'b, 'a c_vdt expr array -> 'b) ctyp
 
-  val sub_vec128 : 'a c_v128 expr -> c_int32 c_ityp c_vdt expr -> 'a c_vdt expr
-  val sub_vec256 : 'a c_v256 expr -> c_int32 c_ityp c_vdt expr -> 'a c_vdt expr
-  val sub_vec512 : 'a c_v512 expr -> c_int32 c_ityp c_vdt expr -> 'a c_vdt expr
-  val sub_vec128l : 'a c_v128 expr -> c_int32 c_ityp c_vdt expr -> 'a c_vdt expr
-  val sub_vec256l : 'a c_v256 expr -> c_int32 c_ityp c_vdt expr -> 'a c_vdt expr
-  val sub_vec512l : 'a c_v512 expr -> c_int32 c_ityp c_vdt expr -> 'a c_vdt expr
+  val make_vec128c : ('a c_vdt, _, _) ctyp -> ('a c_v128, 'b, 'a c_v128 expr -> 'b) ctyp
+  val make_vec256c : ('a c_vdt, _, _) ctyp -> ('a c_v256, 'b, 'a c_v256 expr -> 'b) ctyp
+  val make_vec512c : ('a c_vdt, _, _) ctyp -> ('a c_v512, 'b, 'a c_v512 expr -> 'b) ctyp
 
+  val sub_vec128 : ('a c_v128, _, _) ctyp -> 'a c_v128 expr -> 'b c_ityp c_vdt expr -> 'a c_vdt expr
+  val sub_vec256 : ('a c_v256, _, _) ctyp -> 'a c_v256 expr -> 'b c_ityp c_vdt expr -> 'a c_vdt expr
+  val sub_vec512 : ('a c_v512, _, _) ctyp -> 'a c_v512 expr -> 'b c_ityp c_vdt expr -> 'a c_vdt expr
+  val sub_vec128l : ('a c_v128, _, _) ctyp -> 'a c_v128 expr lval -> 'b c_ityp c_vdt expr -> 'a c_vdt expr lval
+  val sub_vec256l : ('a c_v256, _, _) ctyp -> 'a c_v256 expr lval -> 'b c_ityp c_vdt expr -> 'a c_vdt expr lval
+  val sub_vec512l : ('a c_v512, _, _) ctyp -> 'a c_v512 expr lval -> 'b c_ityp c_vdt expr -> 'a c_vdt expr lval
+
+  type 'a cref
+  type noinit
+
+  val make_cref : ('at, _, _) ctyp -> ('at cref, 'a, noinit -> 'a) ctyp
+  val malloc : ('at, _, _) ctyp -> 'at expr -> ('at cref expr -> 'b stmt) -> 'b stmt
+  val deref : 'at cref expr -> 'at expr lval
 
   type 'a basic_mtyp
   (* Experimental Extensions *)
@@ -86,7 +96,7 @@ module WagonC : sig
   
   val if_stmt : c_bool expr -> 'rt stmt -> 'rt stmt -> 'rt stmt
   val seq_stmt : 'rt stmt list -> 'rt stmt
-  val ret_stmt : 'rt expr -> 'rt stmt
+  val ret_stmt : 'rt expr -> 'rt stmt  
   (* For-statement generator: Notice decl_stmt is needed *)
   val for_stmt : c_bool expr * 'any expr * 'rt stmt -> 'rt stmt
   (* Constexpr initializer generator *)
@@ -176,8 +186,8 @@ end
 
   type ('args, 'rt, 'dep) fn = {fn_name : string; fn_decl : string ; fn_dep : 'dep fn_hl}
   and _ fn_hl = 
-  | Nodep : unit fn_hl
-  | Lnk : ('args, 'rt, 'dep) fn * 'base fn_hl -> (('args * 'rt * 'dep) * 'base) fn_hl
+  | NoneFnHL : unit fn_hl
+  | ConsFnHL : ('args, 'rt, 'dep) fn * 'base fn_hl -> (('args * 'rt * 'dep) * 'base) fn_hl
 
   type ('args, 'rt, 'dep) fn_callable = 'args expr -> 'rt expr
   type _ fn_callable_hl =
@@ -189,11 +199,15 @@ end
 
   (* Functional-Unparsing Powered C-Type Representation *)
   type ('at, 'a, 'b) ctyp = {
-    decl : string -> string;
-    tn : string;
-    init : (string -> 'a) -> 'b;
-    size : int;
-    abbr : unit -> string
+    decl : string -> string;      (* "vname" -> "vtype vname" *)
+    decl_fx : string -> string;   (* "vname" -> "vtype vname" for function args list *)
+    tn : string;                  (* "typename" *)
+    tn_fx : string;               (* "typename" for function args list *)
+    init : (string -> 'a) -> 'b;  (* FU-style format based composable initializer *)
+    size : int;                   (* Desired as same as sizeof() in C *)
+    abbr : unit -> string;        (* Only for __m512[i/d/nothing]<-here *)
+    align : bool;                 (* Is aligned_alloc() needed in case of dynamic memory allocation *)
+    align_size : int              (* Allocation alignment info, if aligned_alloc() needed *)
   }
 
   (* Abstract Types: Primitive Types *)
@@ -248,125 +262,230 @@ end
 
   let c_void = {
     decl = (fun x -> "");
+    decl_fx = (fun x -> "");
     tn = "void";
+    tn_fx = "void";
     init = (fun f () -> f "()");
     size = 0;
-    abbr = fun () -> failwith "Should not happen"
+    abbr = (fun () -> failwith "Should not happen");
+    align = false;
+    align_size = 0
   }
   let c_bool = {
     decl = (fun x -> "bool " ^ x);
+    decl_fx = (fun x -> "bool " ^ x);
     tn = "bool";
+    tn_fx = "bool";
     init = (fun f x -> f (if x then "true" else "false"));
     size = 1;
-    abbr = fun () -> failwith "Should not happen"
+    abbr = (fun () -> failwith "Should not happen");
+    align = false;
+    align_size = 0
   }
   let c_int8 = {
     decl = (fun x -> "int8_t " ^ x);
+    decl_fx = (fun x -> "int8_t " ^ x);
     tn = "int8_t";
+    tn_fx = "int8_t";
     init = (fun f x -> f (Printf.sprintf "(int8_t)%d" x));
     size = 1;
-    abbr = fun () -> "i"
+    abbr = (fun () -> "i");
+    align = false;
+    align_size = 0
   }
   let c_int16 = {
     decl = (fun x -> "int16_t " ^ x);
+    decl_fx = (fun x -> "int16_t " ^ x);
     tn = "int16_t";
+    tn_fx = "int16_t";
     init = (fun f x -> f (string_of_int x));
     size = 2;
-    abbr = fun () -> "i"
+    abbr = (fun () -> "i");
+    align = false;
+    align_size = 0
   }
   let c_int32 = {
     decl = (fun x -> "int32_t " ^ x);
+    decl_fx = (fun x -> "int32_t " ^ x);
     tn = "int32_t";
+    tn_fx = "int32_t";
     init = (fun f x -> f (string_of_int x));
     size = 4;
-    abbr = fun () -> "i"
+    abbr = (fun () -> "i");
+    align = false;
+    align_size = 0
   }
   let c_int64 = {
     decl = (fun x -> "int64_t " ^ x);
+    decl_fx = (fun x -> "int64_t " ^ x);
     tn = "int64_t";
+    tn_fx = "int64_t";
     init = (fun f x -> f (string_of_int x));
     size = 8;
-    abbr = fun () -> "i"
+    abbr = (fun () -> "i");
+    align = false;
+    align_size = 0
   }
   let c_float32 = {
     decl = (fun x -> "float " ^ x);
+    decl_fx = (fun x -> "float " ^ x);
     tn = "float";
+    tn_fx = "float";
     init = (fun f x -> f (string_of_float x ^ "f"));
     size = 4;
-    abbr = fun () -> ""
+    abbr = (fun () -> "");
+    align = false;
+    align_size = 0
   }
   let c_float64 = {
     decl = (fun x -> "double " ^ x);
+    decl_fx = (fun x -> "double " ^ x);
     tn = "double";
+    tn_fx = "double";
     init = (fun f x -> f (string_of_float x));
     size = 8;
-    abbr = fun () -> "d"
+    abbr = (fun () -> "d");
+    align = false;
+    align_size = 0
   }
 
   let c_string l = {
     decl = (fun x -> Printf.sprintf "char %s[%d]" x l);
+    decl_fx = (fun x -> Printf.sprintf "char %s[%d]" x l);
     tn = "char*";
+    tn_fx = "char*";
     init = (fun f x -> if String.length x > l-1 then failwith "oversized string literal" 
                        else f ("\"" ^ String.escaped x ^ "\""));
     size = l;
-    abbr = fun () -> failwith "Should not happen"
+    abbr = (fun () -> failwith "Should not happen");
+    align = false;
+    align_size = 0
   }
 
   let empty_mtyp = {
     decl = (fun x -> "");
+    decl_fx = (fun x -> "");
     tn = "<UNIT>";
+    tn_fx = "<UNIT>";
     init = (fun f -> f "");
     size = 0;
-    abbr = fun () -> failwith "Should not happen"
+    abbr = (fun () -> failwith "Should not happen");
+    align = false;
+    align_size = 0
   }
 
   let make_vec128 vdt = 
   let vname = Printf.sprintf "__m128%s" (vdt.abbr ()) in 
   let vlen = 16 in
+  let vmember = Printf.sprintf "m%d_%s%d" (vlen*8) (if vdt.abbr () = "i" then "i" else "f") (vdt.size * 8) in
   {
     decl = (fun x -> Printf.sprintf "%s %s" vname x);
+    decl_fx = (fun x -> Printf.sprintf "%s %s" vname x);
     tn = vname;
+    tn_fx = vname;
     init = (fun f x -> if Array.length x = (vlen / vdt.size) 
                        then f (Printf.sprintf "{%s}" (String.concat ", " @@ Array.to_list x))
                        else failwith "vec128 initializer size mismatch");
     size = vlen;
-    abbr = fun () -> failwith "Should not happen"
+    abbr = (fun () -> vmember);
+    align = true;
+    align_size = 16
   }
   let make_vec256 vdt = 
   let vname = Printf.sprintf "__m256%s" (vdt.abbr ()) in 
   let vlen = 32 in
+  let vmember = Printf.sprintf "m%d_%s%d" (vlen*8) (if vdt.abbr () = "i" then "i" else "f") (vdt.size * 8) in
   {
     decl = (fun x -> Printf.sprintf "%s %s" vname x);
+    decl_fx = (fun x -> Printf.sprintf "%s %s" vname x);
     tn = vname;
+    tn_fx = vname;
     init = (fun f x -> if Array.length x = (vlen / vdt.size) 
                        then f (Printf.sprintf "{%s}" (String.concat ", " @@ Array.to_list x))
                        else failwith "vec256 initializer size mismatch");
     size = vlen;
-    abbr = fun () -> failwith "Should not happen"
+    abbr = (fun () -> vmember);
+    align = true;
+    align_size = 32
   }
   let make_vec512 vdt = 
   let vname = Printf.sprintf "__m512%s" (vdt.abbr ()) in 
   let vlen = 64 in
+  let vmember = Printf.sprintf "m%d_%s%d" (vlen*8) (if vdt.abbr () = "i" then "i" else "f") (vdt.size * 8) in
   {
     decl = (fun x -> Printf.sprintf "%s %s" vname x);
+    decl_fx = (fun x -> Printf.sprintf "%s %s" vname x);
     tn = vname;
+    tn_fx = vname;
     init = (fun f x -> if Array.length x = (vlen / vdt.size) 
                        then f (Printf.sprintf "{%s}" (String.concat ", " @@ Array.to_list x))
                        else failwith "vec512 initializer size mismatch");
     size = vlen;
-    abbr = fun () -> failwith "Should not happen"
+    abbr = (fun () -> vmember);
+    align = true;
+    align_size = 64
   }
+
+  let make_vec128c vdt = 
+    let vname = Printf.sprintf "__m128%s" (vdt.abbr ()) in 
+    let vlen = 16 in
+    let vmember = Printf.sprintf "m%d_%s%d" (vlen*8) (if vdt.abbr () = "i" then "i" else "f") (vdt.size * 8) in
+    {
+      decl = (fun x -> Printf.sprintf "%s %s" vname x);
+      decl_fx = (fun x -> Printf.sprintf "%s %s" vname x);
+      tn = vname;
+      tn_fx = vname;
+      init = (fun f x -> f x);
+      size = vlen;
+      abbr = (fun () -> vmember);
+      align = true;
+      align_size = 16
+    }  
+  let make_vec256c vdt = 
+    let vname = Printf.sprintf "__m256%s" (vdt.abbr ()) in 
+    let vlen = 32 in
+    let vmember = Printf.sprintf "m%d_%s%d" (vlen*8) (if vdt.abbr () = "i" then "i" else "f") (vdt.size * 8) in
+    {
+      decl = (fun x -> Printf.sprintf "%s %s" vname x);
+      decl_fx = (fun x -> Printf.sprintf "%s %s" vname x);
+      tn = vname;
+      tn_fx = vname;
+      init = (fun f x -> f x);
+      size = vlen;
+      abbr = (fun () -> vmember);
+      align = true;
+      align_size = 32
+    }
+  let make_vec512c vdt = 
+    let vname = Printf.sprintf "__m512%s" (vdt.abbr ()) in 
+    let vlen = 64 in
+    let vmember = Printf.sprintf "m%d_%s%d" (vlen*8) (if vdt.abbr () = "i" then "i" else "f") (vdt.size * 8) in
+    {
+      decl = (fun x -> Printf.sprintf "%s %s" vname x);
+      decl_fx = (fun x -> Printf.sprintf "%s %s" vname x);
+      tn = vname;
+      tn_fx = vname;
+      init = (fun f x -> f x);
+      size = vlen;
+      abbr = (fun () -> vmember);
+      align = true;
+      align_size = 64
+    }
 
   let (@^) = fun x y -> {
     decl = (fun a -> x.decl @@ y.decl a);
+    decl_fx = (fun a -> x.decl_fx @@ y.decl_fx a);
     (* Check if EMPTY_MTYP terminator *)
     tn = if y.tn != empty_mtyp.tn then x.tn ^ "," ^ y.tn else x.tn;
+    tn_fx = if y.tn_fx != empty_mtyp.tn_fx then x.tn_fx ^ "," ^ y.tn_fx else x.tn_fx;
     init = (fun k -> x.init (fun sa -> y.init (
       if y.tn != empty_mtyp.tn then (fun sb -> k (sa ^ ", " ^ sb))
       else (fun sb -> k (sa ^ sb)))))
     ;
     size = x.size + y.size;
-    abbr = fun () -> failwith "Should not happen"
+    abbr = (fun () -> failwith "Should not happen");
+    align = false;
+    align_size = 0
   }
   let _lbk = fun k -> k "{"
   let _rbk = fun k -> k "}"
@@ -374,37 +493,60 @@ end
   let make_struct = fun x -> 
     let struct_name = Printf.sprintf "ws_%08x" @@ Hashtbl.hash (x.decl "") in
     let struct_name_fmt = fun k -> k (Printf.sprintf "(%s)" struct_name) in
+    let struct_decl = "typedef struct " ^ struct_name ^ "{\n"
+     ^ String.concat "\n" (List.mapi (fun i a -> Printf.sprintf "%s m%d;" a i) (String.split_on_char ',' (x.decl "")) )
+     ^ "\n}" 
+    in
     {
         decl = (fun a -> struct_name ^ " " ^ a);
+        decl_fx = (fun a -> struct_name ^ " " ^ a);
         tn = struct_name;
+        tn_fx = struct_name;
         init = _con struct_name_fmt(_con (_con _lbk x.init) _rbk);
         size = x.size;
-        abbr = fun () -> failwith "Should not happen"
+        abbr = (fun () -> failwith "Should not happen");
+        align = false;
+        align_size = 0
     }
-  let make_array = fun t n -> {
+  let make_array = fun t n -> 
+    let need_align = t.align in
+    let align_size = t.align_size in
+  {
     decl = (fun x -> Printf.sprintf "%s[%d]" (t.decl x) n);
+    decl_fx = (fun x -> t.decl ("*" ^ x) );
     tn = Printf.sprintf "%s[%d]" t.tn n;
+    tn_fx = Printf.sprintf "%s*" t.tn;
     init = (fun k arr -> 
       if Array.length arr > n then failwith ""
       else
       let lst = Array.to_list arr in
       k ( "{" ^ (String.concat ", " lst) ^ "}"));
     size = n * t.size;
-    abbr = fun () -> failwith "Should not happen"
+    abbr = (fun () -> failwith "Should not happen");
+    align = need_align;
+    align_size = align_size
   }
 
   let make_args = fun x -> 
     let args_list = String.split_on_char ',' x.tn in
+    let args_list_fx = String.split_on_char ',' x.tn_fx in
     (* TODO: Replace [] into "*" *)
     {
         decl = (fun _ -> 
           String.concat ", " @@ 
             List.mapi (fun i n -> 
               Printf.sprintf "%s p%d" n i) args_list);
+        decl_fx = (fun _ -> 
+          String.concat ", " @@ 
+            List.mapi (fun i n -> 
+              Printf.sprintf "%s p%d" n i) args_list_fx);
         tn = x.tn;
+        tn_fx = x.tn;
         init = x.init;
         size = -1;
-        abbr = fun () -> failwith "Should not happen"
+        abbr = (fun () -> failwith "Should not happen");
+        align = false;
+        align_size = 0
     }
 
 
@@ -412,8 +554,8 @@ end
   fun fnhl ->
   let fn_transform fn = fun args -> Printf.sprintf "%s(%s)" fn.fn_name args in
   match fnhl with
-  | Nodep -> NoneFnCHL
-  | Lnk(a,b) -> ConsFnCHL (fn_transform a, fn_hl_transform b)
+  | NoneFnHL -> NoneFnCHL
+  | ConsFnHL(a,b) -> ConsFnCHL (fn_transform a, fn_hl_transform b)
 
 
   let make_fn_rec ?cname argt rt dep rawf =
@@ -428,7 +570,7 @@ end
     {
       fn_name = fn_name;
       fn_decl = Printf.sprintf "%s %s(%s)\n{\n%s\n}" 
-        rt.tn fn_name (argt.decl "p0") (rawf self_fn (fn_hl_transform dep) "p0");
+        (rt.decl_fx "") fn_name (argt.decl_fx "p0") (rawf self_fn (fn_hl_transform dep) "p0");
       fn_dep = dep
     }
   let make_fn ?cname argt rt dep rawf =
@@ -436,15 +578,15 @@ end
     | None -> make_fn_rec argt rt dep (fun _ -> rawf) 
     | Some cn -> make_fn_rec ~cname:cn argt rt dep (fun _ -> rawf)
 
-  let empty_fn = Nodep
-  let (@&) a b = Lnk(a,b)
+  let empty_fn = NoneFnHL
+  let (@&) a b = ConsFnHL(a,b)
   
     
   let ret_stmt = fun x -> Printf.sprintf "return %s;" x
 
   let if_stmt = fun cond t f -> Printf.sprintf "if (%s) { %s } else { %s }" cond t f
 
-  let seq_stmt = fun l -> List.fold_left (^) "" l
+  let seq_stmt = fun l -> String.concat "\n" l
 
   let expr_stmt = fun x -> x ^ ";"
 
@@ -454,13 +596,16 @@ end
   let sub_arr typ v n = Printf.sprintf "%s[%s]" v n
   let sub_arrl = sub_arr
 
-  let sub_vec128 = sub_arr ()
-  let sub_vec256 = sub_arr ()
-  let sub_vec512 = sub_arr ()
+  let sub_vec typ v n = Printf.sprintf "%s.%s[%s]" v (typ.abbr ()) n
+  let sub_vec128 = sub_vec
+  let sub_vec256 = sub_vec
+  let sub_vec512 = sub_vec
+  let sub_vec128l = sub_vec
+  let sub_vec256l = sub_vec
+  let sub_vec512l = sub_vec
 
-  let sub_vec128l = sub_arr ()
-  let sub_vec256l = sub_arr ()
-  let sub_vec512l = sub_arr ()
+
+
 
 
   let _decl_counter = ref 0
@@ -469,6 +614,46 @@ end
   let decl_stmt typ iv fxs = 
     let decl_name = Printf.sprintf "wdecl_%d" @@ _decl_get_counter () in
     Printf.sprintf "{ %s = %s; %s }" (typ.decl decl_name) iv (fxs decl_name)
+
+  
+  type 'a cref
+  type noinit = unit (* For convenience in impl. *)
+  
+    (* val make_cref : ('at, _, _) ctyp -> ('at cref, 'a, noinit -> 'a) ctyp *)
+    let make_cref t = {
+      decl = (fun x -> t.decl ("*" ^ x) );
+      decl_fx = (fun x -> t.decl_fx ("*" ^ x) );
+      tn = Printf.sprintf "%s*" t.tn;
+      tn_fx = Printf.sprintf "%s*" t.tn_fx;
+      init = (fun k -> failwith "CRef literal is not permitted");
+      size = 8;
+      abbr = (fun () -> failwith "Should not happen");
+      align = false;
+      align_size = 0
+    }
+  
+  
+    (* val malloc : ('at, _, _) ctyp -> 'at expr -> ('at cref expr -> 'b stmt) -> 'b stmt *)
+  
+    let malloc t i f =
+      let malloc_name = Printf.sprintf "wdmem_%d" @@ _decl_get_counter () in
+      let malloc_call = if t.align 
+        then Printf.sprintf "aligned_alloc(%d, %d)" t.size t.align_size 
+        else Printf.sprintf "malloc(%d)" t.size
+      in
+      let free_call = Printf.sprintf "free(%s)" malloc_name in
+      let malloc_main = Printf.sprintf "{%s = %s; %s; %s;}" 
+        (t.decl @@ "*" ^ malloc_name)
+        malloc_call
+        (f malloc_name)
+        free_call
+      in
+      malloc_main
+      
+    (* val deref : 'at cref expr -> 'at lval expr *)
+    let deref = Printf.sprintf "(*%s)"
+  
+    (* void transposemv512f32(__m512* dst, __m512* src); *)
 
   let for_stmt : c_bool expr * 'any expr * 'rt stmt -> 'rt stmt =
   fun (cond,step,s) -> 
@@ -484,11 +669,10 @@ end
     let dependencies = (show_fn_dep fn.fn_dep) in 
     dependencies @ [fn.fn_decl]
   and show_fn_dep : type a. a fn_hl -> string list = function
-  | Nodep -> []
-  | Lnk (hd, tl) -> (show_func_with_dep_inner hd) @ (show_fn_dep tl)
+  | NoneFnHL -> []
+  | ConsFnHL (hd, tl) -> (show_func_with_dep_inner hd) @ (show_fn_dep tl)
 
   let uniq_cons x xs = if List.mem x xs then xs else x :: xs
-
   let remove_from_right xs = List.fold_right uniq_cons xs []
   let show_func_with_dep f = remove_from_right @@ show_func_with_dep_inner f
 
@@ -582,6 +766,4 @@ end
     let full_code = p.func |> String.concat "\n" in
     include_headers ^ "\n" ^ full_code
     
-
-
 end
